@@ -1,0 +1,12 @@
+{
+  "name": "idiot-site",
+  "version": "1.0.0",
+  "description": "You are an idiot style prank site",
+  "private": true,
+  "scripts": {
+    "start": "npx serve -s . -p 8000"
+  },
+  "dependencies": {
+    "serve": "^14.2.1"
+  }
+}
